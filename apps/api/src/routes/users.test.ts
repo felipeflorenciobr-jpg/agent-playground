@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import express from "express";
+import express, { NextFunction, Request, Response } from "express";
 import usersRouter from "./users";
 
 const app = express();
 app.use(express.json());
 app.use("/users", usersRouter);
+app.use((error: Error, _req: Request, res: Response, next: NextFunction) => {
+  if (error instanceof SyntaxError) {
+    res.status(400).json({ error: "Invalid JSON body." });
+    return;
+  }
+
+  next(error);
+});
 
 let server: ReturnType<typeof app.listen>;
 let baseUrl: string;
@@ -49,8 +57,26 @@ describe("POST /users", () => {
     assert.equal(response.status, 400);
   });
 
+  it("rejects null JSON bodies", async () => {
+    const response = await createUser(null);
+
+    assert.equal(response.status, 400);
+  });
+
+  it("rejects missing email values", async () => {
+    const response = await createUser({ name: "Ada Lovelace" });
+
+    assert.equal(response.status, 400);
+  });
+
   it("requires a valid email", async () => {
     const response = await createUser({ email: "not-an-email" });
+
+    assert.equal(response.status, 400);
+  });
+
+  it("rejects blank email values after trimming", async () => {
+    const response = await createUser({ email: "   " });
 
     assert.equal(response.status, 400);
   });
@@ -67,6 +93,17 @@ describe("POST /users", () => {
     assert.equal(body.data.name, "Ada Lovelace");
   });
 
+  it("omits blank optional names", async () => {
+    const response = await createUser({
+      email: "person@example.com",
+      name: "   "
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 201);
+    assert.equal(body.data.name, undefined);
+  });
+
   it("ignores client-controlled id and unrelated fields", async () => {
     const response = await createUser({
       id: "client-id",
@@ -79,5 +116,27 @@ describe("POST /users", () => {
     assert.notEqual(body.data.id, "client-id");
     assert.equal(body.data.email, "user@example.com");
     assert.equal(body.data.role, undefined);
+  });
+
+  it("generates ids server-side as UUIDs", async () => {
+    const response = await createUser({ email: "uuid@example.com" });
+    const body = await response.json();
+
+    assert.equal(response.status, 201);
+    assert.match(
+      body.data.id,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
+  });
+});
+
+describe("GET /users", () => {
+  it("preserves the existing listing response", async () => {
+    const response = await fetch(`${baseUrl}/users`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.data, []);
+    assert.equal(body.message, "User listing is not implemented yet.");
   });
 });
